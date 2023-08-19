@@ -1,10 +1,13 @@
 const express = require('express');
+const clientSessions = require('client-sessions');
+const authData = require('./auth-service');
 const storeService = require('./store-service');
 const app = express();
 const multer = require("multer");
 const cloudinary = require('cloudinary').v2;
 const streamifier = require('streamifier');
 const upload = multer(); 
+
 const exphbs = require("express-handlebars");
 var path = require('path');
 const port = process.env.PORT || 8080;
@@ -18,6 +21,29 @@ cloudinary.config({
     secure: true
   });
 
+  app.use(clientSessions({
+    cookieName: 'session',
+    secret: 'your-secret-key',
+    duration: 24 * 60 * 60 * 1000, // 1 day in milliseconds
+    activeDuration: 1000 * 60 * 5 // 5 minutes in milliseconds
+  }));
+
+
+  app.use(function(req, res, next) {
+    res.locals.session = req.session;
+    next();
+  });
+  
+
+ 
+  function ensureLogin(req, res, next) {
+    if (!req.session.user.userName) {
+      res.redirect("/login");
+    } else {
+      next();
+    }
+  }
+  
 
 app.use(function(req,res,next){let route = req.path.substring(1);app.locals.activeRoute = "/" + (isNaN(route.split('/')[1]) ? route.replace(/\/(?!.*)/, "") : route.replace(/\/(.*)/, ""));app.locals.viewingCategory = req.query.category;next();})
 app.use(express.static('public'));
@@ -60,16 +86,66 @@ app.get('/', (req, res) => {
     res.render("about");
 });
 
+app.get('/login',(reg,res)=>
+{
+    res.render("login");
 
+});
+app.get('/register',(reg,res)=>
+{
+    res.render("register");
+
+});
   
+app.post('/register', (req, res) => {
+  const userData = req.body;
+  authData.registerUser(userData)
+    .then(() => {
+      res.render('register', { successMessage: 'User created' });
+    })
+    .catch((err) => {
+      res.render('register', { errorMessage: err, userName: req.body.userName });
+    });
+});
+
+
+app.post('/login', (req, res) => {
+ 
+  const userData = req.body;
+  req.body.userAgent = req.get('User-Agent');
+  authData.checkUser(userData)
+    .then((user) => {
+      req.session.user = {
+        userName: user.userName,
+        email: user.email,
+        loginHistory: user.loginHistory,
+      };
+      console.log(req.session.user.userName)
+      res.redirect('/items');
+    })
+    .catch((err) => {
+      res.render('login', { errorMessage: err, userName: req.body.userName });
+    });
+});
+
+
+app.get('/logout', (req, res) => {
+  req.session.reset();
+  res.redirect('/');
+});
+
+// User history route
+app.get('/userHistory', ensureLogin, (req, res) => {
+  res.render('userHistory');
+});
   // Route: /shop
 
-  app.get("/shop", async (req, res) => {
+  app.get("/shop",async (req, res) => {
     // Declare an object to store properties for the view
     let viewData = {};
   
     try {
-      // declare empty array to hold "post" objects
+    
       let items = [];
   
       // if there's a "category" query, filter the returned posts by category
@@ -191,7 +267,7 @@ app.get('/items/add', (req, res) => {
   });
   
   // Route: /items
-  app.get('/items', (req, res) => {
+  app.get('/items',ensureLogin, (req, res) => {
 
     let queryPromise = null;
 
@@ -229,7 +305,7 @@ app.get('/items/add', (req, res) => {
   
   
   // Route: /categories
-  app.get('/categories', (req, res) => {
+  app.get('/categories',ensureLogin, (req, res) => {
     storeService.getCategories().then((data => {
         if(data.length > 0)
         {
@@ -251,7 +327,7 @@ app.get('/items/add', (req, res) => {
     });
 });
 
-app.get('/categories', (req, res) => {
+app.get('/categories',ensureLogin, (req, res) => {
   storeService.getCategories().then((data => {
 
       if(data.length > 0)
@@ -278,7 +354,7 @@ app.get('/categories', (req, res) => {
 
 
 
-app.get('/categories/add', (req, res) => {
+app.get('/categories/add',ensureLogin, (req, res) => {
 
   res.render("addCategory")
 
@@ -287,7 +363,7 @@ app.get('/categories/add', (req, res) => {
 });
 
 
-app.post('/categories/add',(req,res) =>
+app.post('/categories/add',ensureLogin,(req,res) =>
 {
     if(req.file){
         let streamUpload = (req) => {
@@ -420,13 +496,14 @@ app.get('/categories/delete/:id', (req, res) => {
   
   
 
+
   storeService.initialize()
-  .then(() => {
-   
-    app.listen(port, () => {
-      console.log(`Express http server listening on port ${port}`);
+.then
+(authData.initialize)
+.then(function(){
+    app.listen(port, function(){
+        console.log("app listening on: " + port)
     });
-  })
-  .catch(error => {
-    console.error('Error initializing store service:', error);
-  });
+}).catch(function(err){
+    console.log("unable to start server: " + err);
+});
